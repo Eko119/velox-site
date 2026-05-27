@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 20.18.1
+  PNPM_VERSION: 9.12.0
+
+jobs:
+  verify:
+    name: Lint, typecheck, build, lhci, determinism
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies (frozen)
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint --max-warnings 0
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: SSR/ISR boundary guard
+        run: |
+          set -e
+          violations=0
+
+          # `force-dynamic` is allowed ONLY in /api/contact and /api/personalization
+          bad_dynamic=$(grep -rl --include='*.ts' --include='*.tsx' "force-dynamic" src/ 2>/dev/null \
+            | grep -vE '^src/app/api/(contact|personalization)/route\.tsx?$' || true)
+          if [ -n "$bad_dynamic" ]; then
+            echo "::error::force-dynamic found outside allowed routes:"
+            echo "$bad_dynamic"
+            violations=$((violations + 1))
+          fi
+
+          # `export const revalidate` is allowed ONLY in /api/site
+          bad_revalidate=$(grep -rl --include='*.ts' --include='*.tsx' "export const revalidate" src/ 2>/dev/null \
+            | grep -vE '^src/app/api/site/route\.tsx?$' || true)
+          if [ -n "$bad_revalidate" ]; then
+            echo "::error::revalidate found outside allowed routes:"
+            echo "$bad_revalidate"
+            violations=$((violations + 1))
+          fi
+
+          if [ "$violations" -gt 0 ]; then
+            echo "SSR/ISR boundary guard failed."
+            exit 1
+          fi
+          echo "Boundary guard passed."
+
+      - name: Build (first)
+        run: pnpm build
+
+      - name: Compute build hash (first)
+        id: hash1
+        run: |
+          set -e
+          HASH=$(find .next/standalone .next/static -type f \
+            \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.json' -o -name '*.txt' -o -name '*.nft.json' \) \
+            -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Build hash (first): $HASH"
+
+      - name: Cold rebuild
+        run: |
+          rm -rf node_modules .next
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      - name: Compute build hash (second)
+        id: hash2
+        run: |
+          set -e
+          HASH=$(find .next/standalone .next/static -type f \
+            \( -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.json' -o -name '*.txt' -o -name '*.nft.json' \) \
+            -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Build hash (second): $HASH"
+
+      - name: Verify determinism
+        run: |
+          if [ "${{ steps.hash1.outputs.hash }}" != "${{ steps.hash2.outputs.hash }}" ]; then
+            echo "::error::Build determinism check failed."
+            echo "  Build 1 hash: ${{ steps.hash1.outputs.hash }}"
+            echo "  Build 2 hash: ${{ steps.hash2.outputs.hash }}"
+            exit 1
+          fi
+          echo "Determinism check passed: ${{ steps.hash1.outputs.hash }}"
+
+      - name: Lighthouse CI (desktop)
+        run: pnpm exec lhci autorun --config=tests/lighthouserc.desktop.json
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}
+
+      - name: Lighthouse CI (mobile)
+        run: pnpm exec lhci autorun --config=tests/lighthouserc.mobile.json
+        env:
+          LHCI_GITHUB_APP_TOKEN: ${{ secrets.LHCI_GITHUB_APP_TOKEN }}

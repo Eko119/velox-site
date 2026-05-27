@@ -1,0 +1,58 @@
+name: Phase Tag
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Apply phase-N-passed tag on green CI
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Extract phase from commit message
+        id: extract
+        run: |
+          set -e
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          MSG=$(git log -1 --pretty=%s "$SHA")
+          echo "Commit message: $MSG"
+          if [[ "$MSG" =~ ^(phase-[0-9]+): ]]; then
+            PHASE="${BASH_REMATCH[1]}"
+            echo "phase=$PHASE" >> "$GITHUB_OUTPUT"
+            echo "Detected phase: $PHASE"
+          else
+            echo "No phase prefix; skipping tag."
+          fi
+
+      - name: Apply phase tag
+        if: ${{ steps.extract.outputs.phase != '' }}
+        env:
+          PHASE: ${{ steps.extract.outputs.phase }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${PHASE}-passed"
+          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; skipping."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}" "${SHA}"
+          git push origin "${TAG}"
+          echo "Applied tag ${TAG} → ${SHA}"
