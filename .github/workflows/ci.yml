@@ -82,11 +82,15 @@ jobs:
         run: |
           set -e
           # Hash code/style outputs and dep traces. Skip `.html` (RSC flight
-          # keys are non-deterministic) and the Next.js manifest JSONs (preview
-          # keys + internal module IDs vary per build). The bundle content
+          # keys are non-deterministic), the Next.js manifest JSONs (preview
+          # keys + internal module IDs vary per build), and the per-route
+          # `_client-reference-manifest.js` files (entryCSSFiles object-key
+          # order varies between builds — runtime uses key lookup, not
+          # iteration, so the behavior is identical). The bundle content
           # itself in `.next/static` and the server `.js` chunks is stable.
           HASH=$(find .next/standalone .next/static -type f \
             \( -name '*.js' -o -name '*.css' -o -name '*.nft.json' \) \
+            ! -name '*_client-reference-manifest.js' \
             -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
           echo "hash=$HASH" >> "$GITHUB_OUTPUT"
           echo "Build hash (first): $HASH"
@@ -102,11 +106,15 @@ jobs:
         run: |
           set -e
           # Hash code/style outputs and dep traces. Skip `.html` (RSC flight
-          # keys are non-deterministic) and the Next.js manifest JSONs (preview
-          # keys + internal module IDs vary per build). The bundle content
+          # keys are non-deterministic), the Next.js manifest JSONs (preview
+          # keys + internal module IDs vary per build), and the per-route
+          # `_client-reference-manifest.js` files (entryCSSFiles object-key
+          # order varies between builds — runtime uses key lookup, not
+          # iteration, so the behavior is identical). The bundle content
           # itself in `.next/static` and the server `.js` chunks is stable.
           HASH=$(find .next/standalone .next/static -type f \
             \( -name '*.js' -o -name '*.css' -o -name '*.nft.json' \) \
+            ! -name '*_client-reference-manifest.js' \
             -print0 2>/dev/null | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
           echo "hash=$HASH" >> "$GITHUB_OUTPUT"
           echo "Build hash (second): $HASH"
